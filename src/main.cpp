@@ -5,12 +5,18 @@ bool debug = false;
 
 class Stick {
   public: 
-    Stick(int lowerLimit, int upperLimit, int assignedPin, int boundryTolerance) {
-      this->boundryTolerance = boundryTolerance;  
+    Stick(int lowerLimit, int upperLimit, int assignedPin, int boundryTolerance):
+      lowerLimit(lowerLimit),
+      upperLimit(upperLimit), 
+      assignedPin(assignedPin),
+      boundryTolerance(boundryTolerance),
+      currentPosition((lowerLimit + upperLimit) / 2)
+    {
+      /* this->boundryTolerance = boundryTolerance;  
       this->lowerLimit = lowerLimit; 
       this->upperLimit = upperLimit;
       this->assignedPin = assignedPin;  
-      this->currentPosition = (lowerLimit + upperLimit) / 2; 
+      this->currentPosition = (lowerLimit + upperLimit) / 2; */ 
     }
 
     void update(int &value) {
@@ -18,6 +24,8 @@ class Stick {
         this->currentPosition = value; 
       }
     }
+
+    virtual void write() = 0; 
 
     int assignedPin; 
     int boundryTolerance; 
@@ -31,27 +39,58 @@ class PWMStick: public Stick {
   public: 
     PWMStick(int lowerLimit, int upperLimit, int assignedPWMPin, int forwardPin, int backWardPin, int boundryTolerance = 50): Stick(lowerLimit, upperLimit, assignedPWMPin, boundryTolerance) { 
       this->forwardPin = forwardPin; 
-      this->backwardPin = backWardPin; 
+      this->backwardPin = backWardPin;
+      this->direction = true;  
     }
 
-    void setForward() {
-      digitalWrite(backwardPin, LOW); 
-      digitalWrite(forwardPin, HIGH); 
+    void setDirectionSafe(bool dir) {
+      if (currentPosition != 0) return; 
+      this->direction = dir; 
     }
 
-    void setBackward() {
-      digitalWrite(forwardPin, LOW); 
-      digitalWrite(backwardPin, HIGH);
+    void write() override {
+      if (currentPosition == 0) {
+        if(direction) { 
+          writeForward(); 
+        } else {
+          writeBackward(); 
+        }
+      } else {
+        writeMappedPWM(); 
+      } 
     }
-
+    
     int forwardPin; 
-    int backwardPin; 
+    int backwardPin;
+
+  private:
+    
+    void writeMappedPWM() {
+      int pwmSignal = map(currentPosition, 0, 1024, 0, 255); 
+      //analogWrite(assignedPin, pwmSignal);
+    } 
+
+    void writeForward() { 
+      //digitalWrite(backwardPin, LOW); 
+      //digitalWrite(forwardPin, HIGH); 
+    }
+
+    void writeBackward() { 
+      //digitalWrite(forwardPin, LOW); 
+      //digitalWrite(backwardPin, HIGH);
+    }
+
+    bool direction; 
 };
 
 class BinaryStick: public Stick {
   public: 
     BinaryStick(int lowerLimit, int upperLimit, int assignedPin, int boundryTolerance = 50): Stick(lowerLimit, upperLimit, assignedPin, boundryTolerance) {
       this->isActive = false;  
+    }
+
+    void write() override {
+      //digitalWrite(assignedPin, isActive);
     }
 
     void update(int &value) {
@@ -62,7 +101,6 @@ class BinaryStick: public Stick {
         isActive = true; 
       }
     }
-
     bool isActive; 
 };
 
@@ -84,19 +122,41 @@ class ToggleStick: public BinaryStick {
       }
     }
 
-    bool isLocked;
-    void writeIfAllowedAndLock() {
+    void write() override {
       if (!isLocked) {
-        digitalWrite(assignedPin, isActive);
+        //digitalWrite(assignedPin, isActive);
         isLocked = true; 
       }
     }
+
+    bool isLocked;
 
   private: 
     void toggleActive() {
       isActive = !isActive; 
     }
 };
+
+class Switch {
+  public:
+    Switch(int assignedPin) {
+      this->assignedPin = assignedPin; 
+      this->active = false; 
+    }
+
+    void update(bool value) {
+      this->active = value; 
+    }
+
+    void write() {
+      //digitalWrite(assignedPin, active); 
+    }
+
+  private: 
+    int assignedPin; 
+    bool active; 
+};
+
 
 
 
@@ -114,7 +174,7 @@ class ToggleStick: public BinaryStick {
 #define PIN_LZ1  0000
 #define PIN_PLACEHOLDER1 0000
 #define PIN_PLACEHOLDER2 0000
-
+#define PIN_PLACEHOLDER3 0000
 
 
 
@@ -147,11 +207,12 @@ const int standardStickTolerance = 50;
 
 BinaryStick lx(0, 1024, 1000, standardStickTolerance); 
 PWMStick ly(0, 1024, PIN_PWM, PIN_FORWARD, PIN_BACKWARD, standardStickTolerance); 
-
+Switch lz(PIN_HORN); 
 ToggleStick ryu(512, 1024, PIN_LIGHTS, standardStickTolerance);
 ToggleStick ryl(0, 1024, PIN_LZ1, standardStickTolerance); 
 ToggleStick rxl(512, 1024, PIN_PLACEHOLDER1, standardStickTolerance); 
 ToggleStick rxr(512, 1024, PIN_PLACEHOLDER2, standardStickTolerance);
+Switch rz(PIN_PLACEHOLDER3);
 
 void setup() {
   Serial.begin(9600);
@@ -192,15 +253,26 @@ void loop() {
 
   lx.update(data.lx); 
   ly.update(data.ly); 
-
+  lz.update(data.lz);
   rxl.update(data.rx); 
   rxr.update(data.rx); 
   ryl.update(data.ry); 
-  ryu.update(data.ry); 
+  ryu.update(data.ry);
+  rz.update(data.rz);  
+
+  lx.write(); 
+  ly.write(); 
+  lz.write(); 
+  
+  rxl.write();
+  rxr.write();
+  ryu.write();
+  ryl.write();
+  rz.write(); 
 
   //LX - Direction 
 
-  if (!lockDirection) {
+/*   if (!lockDirection) {
     if (data.ly <= standardStickTolerance) {
       direction = true; 
       switchOff(PIN_BACKWARD);
@@ -219,7 +291,7 @@ void loop() {
     lockDirection = true; 
   }
   pwm = map(data.ly, 0, 1024, 0, 255);
-  analogWrite(PIN_PWM, pwm);
+  //analogWrite(PIN_PWM, pwm);
   
   //LZ - Horn 
   if (data.ly == 1) {
@@ -242,7 +314,7 @@ void loop() {
     ignoreRXInput = true; 
   } else if (ignoreRXInput && data.rx <= (512 + standardStickTolerance)) {
     ignoreRXInput = false; 
-  }
+  } */
 
   //RY
   //RZ
@@ -257,18 +329,18 @@ void loop() {
   } else {
     lockDirection = true; 
   }
-  analogWrite(PIN_PWM, pwm);
+  //analogWrite(PIN_PWM, pwm);
 
   //RY
   if (!lockDirection) {
     if (data.ry > 700) {
       direction = true; 
-      digitalWrite(PIN_BACKWARD, !direction);
-      digitalWrite(PIN_FORWARD, direction);
+      //digitalWrite(PIN_BACKWARD, !direction);
+      //digitalWrite(PIN_FORWARD, direction);
     } else if (data.ry < 100) {
       direction = false; 
-      digitalWrite(PIN_FORWARD, direction);
-      digitalWrite(PIN_BACKWARD, !direction);
+      //digitalWrite(PIN_FORWARD, direction);
+      //digitalWrite(PIN_BACKWARD, !direction);
     }
   }
 
@@ -298,13 +370,13 @@ void loop() {
     Serial.println();
   } */
 
-  // digitalWrite(PIN_BACKWARD, 1);
+  // //digitalWrite(PIN_BACKWARD, 1);
   // delay(500);
-  // digitalWrite(PIN_BACKWARD, 0);
+  // //digitalWrite(PIN_BACKWARD, 0);
   // delay(500);
-  // digitalWrite(PIN_FORWARD, 1);
+  // //digitalWrite(PIN_FORWARD, 1);
   // delay(500);
-  // digitalWrite(PIN_FORWARD, 0);
+  // //digitalWrite(PIN_FORWARD, 0);
   // delay(500);
 
   // for(int i = 0; i <= 255; i++) {
@@ -314,20 +386,20 @@ void loop() {
   // }
 
   //   for(int i = 255; i >= 0; i--) {
-  //   analogWrite(PIN_PWM, i);
+  //   //analogWrite(PIN_PWM, i);
   //   Serial.println(i);
   //   delay(10);
   // }
 }
 
-void switchOn(int pin) {
-  digitalWrite(pin, HIGH); 
+/* void switchOn(int pin) {
+  //digitalWrite(pin, HIGH); 
 }
 
 void switchOff(int pin) {
-  digitalWrite(pin, LOW); 
+  //digitalWrite(pin, LOW); 
 }
 
 void toggleBool(bool &ref) {
   ref = !ref;
-}
+} */
